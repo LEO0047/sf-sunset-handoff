@@ -1,0 +1,1339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="A scroll-driven San Francisco sunset seen from Treasure Island. The sun's path and twilight times are calculated live for today.">
+<meta name="theme-color" content="#070B18">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23152957'/%3E%3Ccircle cx='32' cy='38' r='13' fill='%23FF7F45'/%3E%3Crect y='38' width='64' height='26' fill='%230B0E1D'/%3E%3C/svg%3E">
+<title>The Handoff</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300..600;1,6..72,300..600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders:wght@100..900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@100..900&display=swap">
+<style>
+[hidden] { display: none !important; }
+/* Layout: one fixed live sky (WebGL) behind a tall scroll track; scroll position = minutes relative to tonight's sunset.
+   Glass panels float over the scene; the title is a silhouette by day and a neon tube by night. */
+:root {
+  --night: #070B18;          /* page ground before the sky renders */
+  --ink: #0E1424;            /* daylight silhouette ink */
+  --paper: #F4EEE8;          /* text on glass */
+  --paper-dim: rgba(244, 238, 232, 0.70);
+  --io: #C0362C;             /* International Orange, the bridge's paint */
+  --neon: #FF4A2A;           /* neon gas glow, orange-red */
+  --led: #E8F0FF;            /* Bay Lights white */
+  --rim: rgba(255, 214, 170, 0.35); /* glass edge, retinted live from the sky */
+  --display: "Big Shoulders", "Big Shoulders Display", "Avenir Next Condensed", "DIN Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --text: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --gutter: clamp(16px, 4vw, 56px);
+  color-scheme: dark;
+}
+html { background: var(--night); }
+body {
+  background: var(--night);
+  color: var(--paper);
+  font-family: var(--text);
+  margin: 0;
+  padding-inline: 16px;
+  padding-block: 0;
+  overflow-x: hidden;
+}
+#scene, #fallback {
+  position: fixed; inset: 0; width: 100%; height: 100%;
+  display: block; z-index: 0;
+}
+#fallback {
+  background: linear-gradient(180deg, #152957 0%, #4F5F7A 48%, #A85A4F 62%, #8A3A44 66%, #0B0E1D 67%, #141729 100%);
+}
+#track { height: 900vh; position: relative; z-index: 1; pointer-events: none; }
+
+/* ---- Title ---- */
+.mast {
+  position: fixed; z-index: 3;
+  top: calc(env(safe-area-inset-top, 0px) + clamp(14px, 3.4vh, 40px));
+  left: var(--gutter);
+  right: var(--gutter);
+  pointer-events: none;
+}
+.title {
+  --w: 780;
+  margin: 0;
+  font-family: var(--display);
+  font-variation-settings: "wght" var(--w);
+  font-weight: 700;
+  font-size: clamp(54px, 10.4vw, 176px);
+  line-height: 0.8;
+  letter-spacing: 0.01em;
+  color: rgba(14, 20, 36, 0.92);
+  white-space: nowrap;
+  text-wrap: balance;
+}
+.where {
+  margin: 0.55em 0 0 0.15em;
+  font-family: var(--text);
+  font-style: italic;
+  font-size: clamp(14px, 1.15vw, 17px);
+  color: var(--paper-dim);
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.35);
+}
+
+/* ---- Glass ---- */
+.glass {
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.02) 55%),
+    rgba(12, 16, 32, 0.30);
+  -webkit-backdrop-filter: blur(18px) saturate(1.5);
+  backdrop-filter: blur(18px) saturate(1.5);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-top-color: var(--rim);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), inset 0 -1px 0 rgba(0, 0, 0, 0.22);
+}
+.glass::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(260px circle at var(--mx, 20%) var(--my, -10%), rgba(255, 255, 255, 0.14), transparent 62%);
+}
+
+/* ---- Readout (real numbers only) ---- */
+.readout {
+  position: fixed; z-index: 3;
+  top: calc(env(safe-area-inset-top, 0px) + clamp(14px, 3.4vh, 40px));
+  right: var(--gutter);
+  border-radius: 16px;
+  padding: 12px 16px 13px;
+  min-width: 12.5rem;
+  pointer-events: none;
+}
+.clock {
+  font-family: var(--display);
+  font-variation-settings: "wght" 560;
+  font-weight: 560;
+  font-size: clamp(30px, 2.8vw, 44px);
+  line-height: 1;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.rel, .alt { font-size: 15px; line-height: 1.35; color: var(--paper-dim); font-variant-numeric: tabular-nums; }
+.rel { margin-top: 6px; color: var(--paper); }
+
+/* ---- Timeline rail: the real sequence of tonight's light ---- */
+.rail {
+  position: fixed; z-index: 3;
+  right: var(--gutter);
+  top: 24vh; bottom: 47vh;
+  width: 1px;
+}
+.rail-line {
+  position: absolute; inset: 0 auto 0 0; width: 1px;
+  background: linear-gradient(180deg, rgba(255, 236, 214, 0.55), rgba(232, 240, 255, 0.35));
+}
+.rail-dot {
+  position: absolute; left: -5px; width: 11px; height: 11px; margin-top: -5.5px; border-radius: 50%;
+  background: #FFE2C4; box-shadow: 0 0 0 3px rgba(255, 226, 196, 0.18), 0 0 14px 2px rgba(255, 170, 110, 0.65);
+  top: 0;
+}
+.mark {
+  position: absolute; right: -6px; margin-top: -0.75em;
+  display: flex; align-items: center; gap: 10px;
+  background: none; border: 0; padding: 4px 0; cursor: pointer;
+  color: var(--paper-dim); font: inherit; font-size: 13.5px; line-height: 1.2; text-align: right;
+  pointer-events: auto; white-space: nowrap;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.55);
+}
+.mark span.t { font-family: var(--display); font-variation-settings: "wght" 520; font-size: 15px; letter-spacing: 0.02em; color: var(--paper); font-variant-numeric: tabular-nums; }
+.mark i { display: block; width: 13px; height: 1px; background: rgba(255, 245, 235, 0.75); }
+.mark:hover, .mark:focus-visible { color: var(--paper); }
+.mark:focus-visible, .btn:focus-visible, .pill:focus-visible { outline: 2px solid var(--led); outline-offset: 3px; border-radius: 6px; }
+
+/* ---- Caption ---- */
+.caption {
+  position: fixed; z-index: 3;
+  left: var(--gutter);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + clamp(16px, 5vh, 52px));
+  width: min(31rem, calc(100vw - 32px));
+  border-radius: 22px;
+  padding: 18px 22px 20px;
+  transition: opacity 260ms ease, filter 260ms ease, transform 260ms ease;
+}
+.caption.swap { opacity: 0; filter: blur(6px); transform: translateY(4px); }
+.caption p { margin: 0; font-size: clamp(17px, 1.32vw, 20px); line-height: 1.5; font-variation-settings: "opsz" 18; text-wrap: pretty; }
+.caption .foot { margin-top: 12px; font-size: 14px; line-height: 1.5; color: var(--paper-dim); }
+.caption .done { font-family: var(--display); font-variation-settings: "wght" 300; font-size: 34px; line-height: 1; letter-spacing: 0.02em; margin-bottom: 10px; }
+.btn {
+  margin-top: 16px;
+  font: inherit; font-size: 15px; color: var(--paper);
+  padding: 9px 16px; border-radius: 999px; cursor: pointer;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+}
+.btn:hover { background: rgba(255, 255, 255, 0.16); }
+
+/* ---- Intro fog on glass ---- */
+.fogglass {
+  position: fixed; inset: 0; z-index: 2; pointer-events: none;
+  --clear: 0%;
+  -webkit-backdrop-filter: blur(26px) saturate(1.25) brightness(1.06);
+  backdrop-filter: blur(26px) saturate(1.25) brightness(1.06);
+  background: radial-gradient(120% 90% at 50% 60%, rgba(255, 245, 235, 0.10), rgba(220, 225, 240, 0.16));
+  -webkit-mask-image: radial-gradient(circle at 62% 58%, transparent var(--clear), #000 calc(var(--clear) + 18%));
+  mask-image: radial-gradient(circle at 62% 58%, transparent var(--clear), #000 calc(var(--clear) + 18%));
+}
+.pill {
+  position: fixed; z-index: 4;
+  right: var(--gutter);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + clamp(16px, 5vh, 52px));
+  border-radius: 999px;
+  padding: 10px 18px;
+  font: inherit; font-size: 15px; color: var(--paper);
+  cursor: pointer;
+  transition: opacity 400ms ease;
+}
+.pill.quiet { opacity: 0; pointer-events: none; }
+p.pill { margin: 0; cursor: default; pointer-events: none; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+@media (max-width: 760px) {
+  .readout { min-width: 0; padding: 10px 13px 11px; }
+  .alt { display: none; }
+  .rel { font-size: 13.5px; }
+  .mast { right: auto; }
+  .where { max-width: 15em; }
+  .rail { top: 30vh; bottom: 50vh; }
+  .mark .l { display: none; }
+  .mark span.t { display: none; }
+  .pill { bottom: auto; top: calc(env(safe-area-inset-top, 0px) + 150px); }
+}
+@media (max-width: 420px) {
+  .readout { top: calc(env(safe-area-inset-top, 0px) + 96px); }
+  .pill { top: calc(env(safe-area-inset-top, 0px) + 196px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .caption, .pill { transition: none; }
+}
+</style>
+</head>
+<body>
+<canvas id="scene" aria-hidden="true"></canvas>
+<div id="fallback" hidden></div>
+<div class="fogglass" id="fog" aria-hidden="true"></div>
+
+<header class="mast">
+  <h1 class="title" id="title">The Handoff</h1>
+  <p class="where" id="where">San Francisco, looking west from Treasure Island</p>
+</header>
+
+<aside class="readout glass" aria-label="Time and sun position">
+  <div class="clock" id="clock">6:41 PM</div>
+  <div class="rel" id="rel">Sunset</div>
+  <div class="alt" id="alt">Sun at the horizon</div>
+</aside>
+
+<nav class="rail" id="rail" aria-label="Tonight's light, in order">
+  <div class="rail-line"></div>
+  <div class="rail-dot" id="railDot"></div>
+</nav>
+
+<section class="caption glass" id="caption" aria-hidden="true">
+  <div id="capBody"><p>Fifty minutes before sunset, looking west from Treasure Island. Downtown, Alcatraz and the Golden Gate line up against the light.</p></div>
+</section>
+
+<button class="pill glass" id="skip" type="button">Skip intro</button>
+<p class="pill glass quiet" id="hint">Scroll to set the sun</p>
+
+<main id="track">
+  <ol class="sr-only" id="srList"></ol>
+</main>
+
+<script>
+(function () {
+'use strict';
+
+/* ================= basics ================= */
+const TZ = 'America/Los_Angeles';
+const LAT = 37.8215, LON = -122.3745;              // Treasure Island, west shore
+const D2R = Math.PI / 180, R2D = 180 / Math.PI;
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+let reduce = motionQuery.matches;
+if (motionQuery.addEventListener) motionQuery.addEventListener('change', e => { reduce = e.matches; });
+
+function mulberry(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function hash1(n) { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); }
+
+/* ================= sun (NOAA / Meeus) ================= */
+function solar(ms) {
+  const jd = ms / 86400000 + 2440587.5, T = (jd - 2451545) / 36525;
+  const L0 = ((280.46646 + T * (36000.76983 + T * 0.0003032)) % 360 + 360) % 360;
+  const M = 357.52911 + T * (35999.05029 - 0.0001537 * T);
+  const ecc = 0.016708634 - T * (0.000042037 + 0.0000001267 * T);
+  const Mr = M * D2R;
+  const C = Math.sin(Mr) * (1.914602 - T * (0.004817 + 0.000014 * T)) + Math.sin(2 * Mr) * (0.019993 - 0.000101 * T) + Math.sin(3 * Mr) * 0.000289;
+  const om = 125.04 - 1934.136 * T;
+  const lam = (L0 + C - 0.00569 - 0.00478 * Math.sin(om * D2R)) * D2R;
+  const eps0 = 23 + (26 + (21.448 - T * (46.815 + T * (0.00059 - T * 0.001813))) / 60) / 60;
+  const eps = (eps0 + 0.00256 * Math.cos(om * D2R)) * D2R;
+  const dec = Math.asin(Math.sin(eps) * Math.sin(lam));
+  let y = Math.tan(eps / 2); y *= y;
+  const L0r = L0 * D2R;
+  const eqt = 4 * R2D * (y * Math.sin(2 * L0r) - 2 * ecc * Math.sin(Mr) + 4 * ecc * y * Math.sin(Mr) * Math.cos(2 * L0r) - 0.5 * y * y * Math.sin(4 * L0r) - 1.25 * ecc * ecc * Math.sin(2 * Mr));
+  const utcMin = ((ms / 60000) % 1440 + 1440) % 1440;
+  const tst = ((utcMin + eqt + 4 * LON) % 1440 + 1440) % 1440;
+  const ha = (tst / 4 - 180) * D2R, lat = LAT * D2R;
+  const cz = clamp(Math.sin(lat) * Math.sin(dec) + Math.cos(lat) * Math.cos(dec) * Math.cos(ha), -1, 1);
+  const el = 90 - Math.acos(cz) * R2D;
+  let az = Math.atan2(Math.sin(ha), Math.cos(ha) * Math.sin(lat) - Math.tan(dec) * Math.cos(lat)) * R2D + 180;
+  az = ((az % 360) + 360) % 360;
+  const sae = h => 1.02 / Math.tan((h + 10.3 / (h + 5.11)) * D2R) / 60;
+  let r = el > 85 ? 0 : el > -1.9 ? sae(el) : sae(-1.9) * clamp(1 + (el + 1.9) / 3, 0, 1);
+  return { el: el, app: el + r, az: az };
+}
+function crossing(t0, t1, target) {
+  let a = t0, b = t1;
+  for (let i = 0; i < 40; i++) { const m = (a + b) / 2; if (solar(m).el > target) a = m; else b = m; }
+  return (a + b) / 2;
+}
+
+let tzOK = true;
+function sfParts(ms) {
+  try {
+    const f = new Intl.DateTimeFormat('en-US', { timeZone: TZ, year: 'numeric', month: 'numeric', day: 'numeric' });
+    const o = {}; f.formatToParts(ms).forEach(p => { o[p.type] = p.value; });
+    return { y: +o.year, m: +o.month, d: +o.day };
+  } catch (e) {
+    tzOK = false; const d = new Date(ms - 7 * 3600e3);
+    return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() };
+  }
+}
+let timeFmt = null, dateFmt = null;
+try {
+  timeFmt = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' });
+  dateFmt = new Intl.DateTimeFormat('en-US', { timeZone: TZ, month: 'long', day: 'numeric' });
+} catch (e) { tzOK = false; }
+function fmtTime(ms) {
+  if (timeFmt) return timeFmt.format(ms);
+  const d = new Date(ms - 7 * 3600e3); let h = d.getUTCHours(); const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return h + ':' + mm + ' ' + ap;
+}
+
+const today = sfParts(Date.now());
+const T0 = Date.UTC(today.y, today.m - 1, today.d, 21, 0), T1 = T0 + 11 * 3600e3;
+const tSunset = crossing(T0, T1, -0.833);
+const tCivil = crossing(T0, T1, -6);
+const tNaut = crossing(T0, T1, -12);
+const tGolden = crossing(T0, T1, 6);
+const mCivil = (tCivil - tSunset) / 60000;
+const mNaut = (tNaut - tSunset) / 60000;
+const mGolden = (tGolden - tSunset) / 60000;
+const M0 = -50;
+const M1 = Math.max(80, mNaut + 16);
+const mToMs = m => tSunset + m * 60000;
+const sunsetAz = solar(tSunset).az;
+
+/* where tonight's sun goes down, as seen from Treasure Island (real bearings) */
+function placePhrase(az) {
+  if (Math.abs(az - 262.9) <= 1.0) return 'right behind the Golden Gate’s south tower';
+  if (Math.abs(az - 273.3) <= 1.0) return 'right behind the Golden Gate’s north tower';
+  if (az > 260.8 && az < 267.2) return 'into the open Pacific, through the Golden Gate';
+  if (az >= 267.2 && az < 276.5) return 'behind the Marin Headlands, just past the bridge';
+  if (az >= 296 && az < 308) return 'behind the shoulder of Mount Tamalpais';
+  if (az >= 276.5 && az < 296) return 'behind the hills of Marin';
+  if (az >= 250 && az <= 260.8) return 'behind the Presidio, just south of the bridge';
+  if (az >= 236 && az < 250) return 'behind Russian Hill and Pacific Heights';
+  if (az >= 308) return 'behind the hills north of Angel Island';
+  return 'behind the hills of the city';
+}
+
+/* ================= copy ================= */
+const chapters = [
+  { m: M0, text: 'Fifty minutes before sunset, looking west from Treasure Island. Downtown, Alcatraz and the Golden Gate line up against the light.' },
+  { m: mGolden, text: 'Golden hour starts at ' + fmtTime(tGolden) + '. The view separates into layers: the Bay Bridge closest, downtown behind it, the hills and the Gate farthest back.' },
+  { m: -14, text: 'The Golden Gate’s International Orange stops reading as a color. From here on, it’s only a shape.' },
+  { m: -0.5, text: 'Sunset at ' + fmtTime(tSunset) + '. Tonight it goes down ' + placePhrase(sunsetAz) + '.' },
+  { m: 6, text: 'Afterglow. The sun is below the horizon, but it is still lighting the clouds from underneath.' },
+  { m: 15, text: 'Karl arrives. San Francisco’s fog has a name, and on summer evenings it often pours in through the Gate about now.' },
+  { m: mCivil - 2, text: 'Civil twilight ends at ' + fmtTime(tCivil) + '. The city switches on: tower beacons, office floors, and Leo Villareal’s Bay Lights along the Bay Bridge cables.' },
+  { m: mCivil + 12, text: 'Blue hour. The top six floors of Salesforce Tower play low-resolution footage of the city on about 11,000 LEDs.' },
+  { m: mNaut - 1, text: 'Nautical twilight ends at ' + fmtTime(tNaut) + '. The sun’s shift is over. The city has it from here.' },
+  { m: M1 - 6, end: true }
+].sort((a, b) => a.m - b.m);
+
+const srList = document.getElementById('srList');
+chapters.forEach(c => {
+  const li = document.createElement('li');
+  li.textContent = c.end ? 'Handoff complete. Sun times and positions are calculated live for San Francisco today.' : c.text;
+  srList.appendChild(li);
+});
+if (dateFmt) document.getElementById('where').textContent = 'San Francisco, looking west from Treasure Island, ' + dateFmt.format(Date.now());
+
+/* ================= DOM refs ================= */
+const canvas = document.getElementById('scene');
+const titleEl = document.getElementById('title');
+const clockEl = document.getElementById('clock');
+const relEl = document.getElementById('rel');
+const altEl = document.getElementById('alt');
+const capEl = document.getElementById('caption');
+const capBody = document.getElementById('capBody');
+const railEl = document.getElementById('rail');
+const railDot = document.getElementById('railDot');
+const fogEl = document.getElementById('fog');
+const skipEl = document.getElementById('skip');
+const hintEl = document.getElementById('hint');
+
+/* ================= scroll <-> time ================= */
+const track = document.getElementById('track');
+function scrollMax() { return Math.max(1, track.offsetHeight - innerHeight); }
+function scrollToM() { const p = clamp(scrollY / scrollMax(), 0, 1); return lerp(M0, M1, p); }
+function mToScroll(m) { return (m - M0) / (M1 - M0) * scrollMax(); }
+
+[
+  { m: mGolden, l: 'Golden hour', t: tGolden },
+  { m: 0, l: 'Sunset', t: tSunset },
+  { m: mCivil, l: 'Civil twilight ends', t: tCivil },
+  { m: mNaut, l: 'Nautical twilight ends', t: tNaut }
+].forEach(k => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'mark';
+  b.style.top = ((k.m - M0) / (M1 - M0) * 100) + '%';
+  b.innerHTML = '<span class="l"></span><span class="t"></span><i></i>';
+  b.querySelector('.l').textContent = k.l;
+  b.querySelector('.t').textContent = fmtTime(k.t);
+  b.setAttribute('aria-label', 'Go to ' + k.l.toLowerCase() + ', ' + fmtTime(k.t));
+  b.addEventListener('click', () => { endIntro(); scrollTo({ top: mToScroll(k.m), behavior: reduce ? 'auto' : 'smooth' }); });
+  railEl.appendChild(b);
+});
+
+/* ================= projection & layout ================= */
+let W = 0, H = 0, scale = 1, perfCap = 1.6;
+let pxH = 12, pxV = 45, horizonY = 500, center = 231, wx = 1.6, Yb = 0, sunR = 22;
+const X = az => W / 2 + (az - center) * pxH;
+const Y = ang => horizonY - ang * pxV;
+const azOf = x => center + (x - W / 2) / pxH;
+
+const maskC = document.createElement('canvas');
+const mask2C = document.createElement('canvas');
+const midBlack = document.createElement('canvas');
+const nearBlack = document.createElement('canvas');
+const lightsC = document.createElement('canvas');
+const lightsCtx = lightsC.getContext('2d');
+const BIN_E = [-0.6, -2, -3.4, -4.8, -6.2, -7.8];
+let farBins = [], midBins = [];
+let beacons = [], deckLights = [], suspenders = [], shoreLights = [];
+let bbDeck = [], bbThick = [];
+
+function interp(pts, a) {
+  if (a <= pts[0][0]) return pts[0][1];
+  for (let i = 1; i < pts.length; i++) {
+    if (a <= pts[i][0]) { const p = pts[i - 1], q = pts[i]; return lerp(p[1], q[1], (a - p[0]) / (q[0] - p[0])); }
+  }
+  return pts[pts.length - 1][1];
+}
+
+/* real bearings (deg) and angular heights (deg) from Treasure Island */
+const FAR_SF = [[186, 0.3], [190, 0.36], [196, 0.45], [201, 0.55], [206, 0.6], [211, 0.8], [215, 1.05], [218, 1.35], [220.8, 1.63], [222, 1.5], [223, 1.44], [224.5, 1.52], [226, 1.4], [228, 1.25], [231, 1.1], [234, 1.0], [236.5, 0.98], [238.7, 1.01], [241, 0.95], [244, 0.82], [247, 0.72], [250.8, 0.79], [253, 0.62], [255.5, 0.5], [258, 0.4], [259.8, 0.28], [260.8, 0.12], [261.6, 0.03], [262.2, 0]];
+const MARIN = [[266.3, 0], [267.3, 0.16], [268.3, 0.45], [269.5, 0.85], [270.6, 1.18], [271.6, 1.4], [272.4, 1.47], [273.4, 1.38], [274.6, 1.22], [275.8, 1.12], [277, 1.2], [278.5, 1.35], [280.5, 1.28], [283, 1.18], [286, 1.26], [290, 1.32], [293, 1.38], [296, 1.55], [299, 1.78], [301.5, 1.97], [303.6, 2.09], [305.5, 1.95], [308, 1.6], [311, 1.3], [315, 1.05], [320, 0.85], [328, 0.7], [336, 0.6]];
+const CITY = [[196.5, 0.2], [198, 0.45], [199.5, 0.6], [201, 0.7], [205, 0.75], [210, 0.7], [214, 0.75], [218, 0.8], [222, 0.8], [225, 0.85], [228, 1.0], [230.5, 1.3], [232.3, 1.38], [234, 1.25], [236, 0.85], [238, 0.9], [240.1, 1.13], [242.5, 0.95], [245, 0.6], [248, 0.42], [251, 0.32], [254, 0.25], [257, 0.18], [259.5, 0.1], [260.6, 0.0]];
+const ANGEL = [[305.2, 0], [306.5, 0.5], [308.5, 1.15], [310.5, 1.65], [312.6, 2.01], [314.4, 1.7], [316.5, 1.2], [318.5, 0.65], [320, 0.2], [320.6, 0]];
+const ALCATRAZ = [[275.6, 0], [276.0, 0.18], [276.6, 0.34], [277.2, 0.48], [278.0, 0.53], [278.8, 0.42], [279.3, 0.2], [279.7, 0]];
+const YBI = [[138, 0], [141, 1.1], [143.5, 2.6], [146.9, 3.93], [150, 3.6], [155, 3.25], [160, 3.05], [164, 2.95], [166.6, 2.75], [167.6, 0.4], [168.2, 0]];
+const BB_DECK = [[165.8, 2.75], [174.1, 2.17], [185.3, 1.66], [189.1, 1.47], [192.1, 1.32], [196.6, 1.09], [198.2, 1.0], [199.5, 0.78], [200.6, 0.5]];
+const BB_DIST = [[165.8, 1.61], [174.1, 1.85], [185.3, 2.42], [189.1, 2.72], [192.1, 3.04], [196.6, 3.69], [198.2, 4.02], [200.6, 4.2]];
+const BB_TOWERS = [[174.1, 4.94, 1.85], [185.3, 3.79, 2.42], [192.1, 3.01, 3.04], [196.6, 2.48, 3.69]];
+const DOWNTOWN = [
+  [201.6, 2.50, 0.30, 'flat'], [203.4, 1.85, 0.28, 'flat'], [204.6, 2.15, 0.32, 'flat'],
+  [206.9, 3.54, 0.30, 'spire'], [208.2, 2.6, 0.30, 'flat'], [209.4, 4.59, 0.37, 'obelisk'],
+  [210.9, 2.83, 0.30, 'flat'], [212.2, 2.2, 0.35, 'flat'], [213.5, 2.3, 0.30, 'slab'],
+  [214.8, 2.5, 0.30, 'slab'], [215.5, 3.06, 0.30, 'twin'], [216.2, 2.72, 0.30, 'slab'],
+  [217.2, 2.40, 0.30, 'slab'], [218.1, 3.25, 0.42, 'flat'], [219.2, 2.1, 0.3, 'flat'],
+  [220.4, 3.87, 0.42, 'pyramid'], [221.6, 1.7, 0.3, 'flat'], [222.8, 1.4, 0.35, 'flat']
+];
+
+function smoothRidge(ctx, pts, rough, seed) {
+  const r = mulberry(seed);
+  const a0 = pts[0][0], a1 = pts[pts.length - 1][0];
+  const step = Math.max(0.06, 2.2 / pxH);
+  ctx.beginPath(); ctx.moveTo(X(a0), Yb);
+  for (let a = a0; a <= a1 + 1e-6; a += step) {
+    const g = interp(pts, a);
+    const j = g > 0.02 ? (r() - 0.5) * rough + (r() < 0.06 ? r() * rough * 2.2 : 0) : 0;
+    ctx.lineTo(X(a), Y(Math.max(0, g + j)));
+  }
+  ctx.lineTo(X(a1), Yb); ctx.closePath(); ctx.fill();
+}
+
+function quadY(y1, cy, y2, t) { const u = 1 - t; return u * u * y1 + 2 * u * t * cy + t * t * y2; }
+
+function drawGG(ctx, isPaint) {
+  const deck = 0.42, top = 1.42, sT = 262.9, nT = 273.3, sA = 260.8, nA = 276.5;
+  const yDeck = Y(deck), yDeckB = Y(deck - 0.075);
+  ctx.fillRect(X(259.2), yDeck, X(nA + 0.25) - X(259.2), Math.max(1.3, yDeckB - yDeck));
+  // towers: Art Deco legs that step in, with portal struts
+  [sT, nT].forEach(az => {
+    const cx = X(az), w = Math.max(4.2, 0.24 * pxH * wx), yT = Y(top), yB = Yb, hgt = yB - yT;
+    const legW = Math.max(1.3, w * 0.3);
+    [[0, 0.46, 1], [0.46, 0.74, 0.86], [0.74, 1, 0.72]].forEach(([a, b, k]) => {
+      const lw = legW * k, inset = (legW - lw) * 0.5;
+      ctx.fillRect(cx - w / 2 + inset, yB - hgt * b, lw, hgt * (b - a) + 0.5);
+      ctx.fillRect(cx + w / 2 - inset - lw, yB - hgt * b, lw, hgt * (b - a) + 0.5);
+    });
+    [0.985, 0.8, 0.6, 0.38].forEach(f => { ctx.fillRect(cx - w / 2 + legW * 0.3, yB - hgt * f, w - legW * 0.6, Math.max(1, hgt * 0.035)); });
+  });
+  // cables
+  ctx.lineWidth = Math.max(0.9, pxH * 0.075);
+  const yTop = Y(top - 0.03), ySag = Y(deck + 0.05);
+  const xs = X(sT), xn = X(nT);
+  ctx.beginPath(); ctx.moveTo(xs, yTop); ctx.quadraticCurveTo((xs + xn) / 2, 2 * ySag - yTop, xn, yTop); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(xs, yTop); ctx.quadraticCurveTo((xs + X(sA)) / 2, Y(0.86), X(sA), Y(deck + 0.02)); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(xn, yTop); ctx.quadraticCurveTo((xn + X(nA)) / 2, Y(0.86), X(nA), Y(deck + 0.02)); ctx.stroke();
+  // suspenders
+  ctx.save(); ctx.globalAlpha = isPaint ? 0.6 : 0.45; ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  for (let x = xs + 2.5; x < xn - 1; x += 2.6) {
+    const t = (x - xs) / (xn - xs); const yc = quadY(yTop, 2 * ySag - yTop, yTop, t);
+    ctx.moveTo(x, yc); ctx.lineTo(x, yDeck);
+  }
+  ctx.stroke(); ctx.restore();
+}
+
+function drawSutro(ctx) {
+  const az = 223.0, base = 1.44, top = 3.13, cx = X(az);
+  const yB = Y(base - 0.04), yT = Y(top), hgt = yB - yT;
+  const w0 = Math.max(7, 0.34 * pxH * wx);
+  const yW = yB - hgt * 0.56;
+  ctx.lineWidth = Math.max(1.1, w0 * 0.07);
+  ctx.beginPath();
+  ctx.moveTo(cx - w0 / 2, yB); ctx.lineTo(cx - w0 * 0.08, yW);
+  ctx.moveTo(cx + w0 / 2, yB); ctx.lineTo(cx + w0 * 0.08, yW);
+  ctx.moveTo(cx, yB); ctx.lineTo(cx, yW);
+  ctx.moveTo(cx - w0 * 0.08, yW); ctx.lineTo(cx - w0 * 0.13, yT + hgt * 0.06);
+  ctx.moveTo(cx + w0 * 0.08, yW); ctx.lineTo(cx + w0 * 0.13, yT + hgt * 0.06);
+  ctx.moveTo(cx, yW); ctx.lineTo(cx, yT);
+  ctx.stroke();
+  ctx.lineWidth = Math.max(1, w0 * 0.06);
+  ctx.beginPath();
+  ctx.moveTo(cx - w0 * 0.26, yB - hgt * 0.64); ctx.lineTo(cx + w0 * 0.26, yB - hgt * 0.64);
+  ctx.moveTo(cx - w0 * 0.21, yB - hgt * 0.8); ctx.lineTo(cx + w0 * 0.21, yB - hgt * 0.8);
+  ctx.moveTo(cx - w0 * 0.3, yB - hgt * 0.3); ctx.lineTo(cx + w0 * 0.3, yB - hgt * 0.3);
+  ctx.stroke();
+  return { cx, yT, yB, hgt, w0 };
+}
+
+function drawBayBridge(ctx) {
+  const deckY = az => Y(interp(BB_DECK, az));
+  const thick = az => Math.atan(0.022 / interp(BB_DIST, az)) * R2D;
+  // deck truss
+  ctx.beginPath();
+  const a0 = 165.8, a1 = 200.6, st = Math.max(0.05, 1 / pxH);
+  ctx.moveTo(X(a0), deckY(a0));
+  for (let a = a0; a <= a1; a += st) ctx.lineTo(X(a), deckY(a));
+  for (let a = a1; a >= a0; a -= st) ctx.lineTo(X(a), Y(interp(BB_DECK, a) - thick(a)));
+  ctx.closePath(); ctx.fill();
+  // piers under the approach
+  for (let a = 197; a < 200.6; a += 0.9) ctx.fillRect(X(a) - 1, deckY(a), 2.2, Yb - deckY(a));
+  // towers with X bracing
+  BB_TOWERS.forEach(([az, ang, d]) => {
+    const cx = X(az), w = Math.max(5, Math.atan(0.03 / d) * R2D * pxH * wx * 0.9), yT = Y(ang), yB = Yb;
+    const lw = Math.max(1.4, w * 0.2);
+    ctx.fillRect(cx - w / 2, yT, lw, yB - yT);
+    ctx.fillRect(cx + w / 2 - lw, yT, lw, yB - yT);
+    ctx.fillRect(cx - w / 2, yT, w, Math.max(1.2, (yB - yT) * 0.03));
+    ctx.lineWidth = Math.max(0.8, lw * 0.45);
+    ctx.beginPath();
+    const yD = deckY(az), panels = 4, ph = (yD - yT) / panels;
+    for (let i = 0; i < panels; i++) {
+      const y0 = yT + i * ph, y1 = y0 + ph;
+      ctx.moveTo(cx - w / 2 + lw, y0); ctx.lineTo(cx + w / 2 - lw, y1);
+      ctx.moveTo(cx + w / 2 - lw, y0); ctx.lineTo(cx - w / 2 + lw, y1);
+    }
+    ctx.stroke();
+  });
+  // central anchorage
+  const ca = 189.1, caW = Math.max(6, 0.5 * pxH * wx), caTop = Y(2.3);
+  ctx.beginPath(); ctx.moveTo(X(ca) - caW / 2, Yb); ctx.lineTo(X(ca) - caW * 0.36, caTop); ctx.lineTo(X(ca) + caW * 0.36, caTop); ctx.lineTo(X(ca) + caW / 2, Yb); ctx.closePath(); ctx.fill();
+  // main cables
+  ctx.lineWidth = Math.max(1, pxH * 0.09);
+  const tw = BB_TOWERS.map(([az, ang]) => [X(az), Y(ang - 0.03), az]);
+  const segs = [
+    [X(166.4), Y(2.95), tw[0][0], tw[0][1], 0.2, 166.4, BB_TOWERS[0][0]],
+    [tw[0][0], tw[0][1], tw[1][0], tw[1][1], 0.9, BB_TOWERS[0][0], BB_TOWERS[1][0]],
+    [tw[1][0], tw[1][1], X(ca), caTop, 0.25, BB_TOWERS[1][0], ca],
+    [X(ca), caTop, tw[2][0], tw[2][1], 0.25, ca, BB_TOWERS[2][0]],
+    [tw[2][0], tw[2][1], tw[3][0], tw[3][1], 0.9, BB_TOWERS[2][0], BB_TOWERS[3][0]],
+    [tw[3][0], tw[3][1], X(198.4), Y(1.2), 0.2, BB_TOWERS[3][0], 198.4]
+  ];
+  const out = [];
+  segs.forEach(([x1, y1, x2, y2, sagF, az1, az2]) => {
+    const ymLine = (y1 + y2) / 2;
+    const deckMid = deckY((az1 + az2) / 2);
+    const sagY = lerp(ymLine, deckMid - 2, sagF);
+    const cy = 2 * sagY - ymLine;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.quadraticCurveTo((x1 + x2) / 2, cy, x2, y2); ctx.stroke();
+    out.push({ x1, y1, x2, y2, cy });
+  });
+  return out;
+}
+
+function drawBuilding(ctx, b, crownCtx, winRegions) {
+  const [az, top, hw, type] = b;
+  const cx = X(az), w = Math.max(3, hw * 2 * pxH * wx), x0 = cx - w / 2, yT = Y(top);
+  if (type === 'obelisk') {
+    const yS = Y(top * 0.92);
+    ctx.beginPath(); ctx.moveTo(x0, Yb); ctx.lineTo(x0 + w * 0.07, yS);
+    ctx.quadraticCurveTo(cx, yT - w * 0.1, x0 + w * 0.93, yS); ctx.lineTo(x0 + w, Yb); ctx.closePath(); ctx.fill();
+    if (crownCtx) { crownCtx.fillRect(x0 + w * 0.08, Y(top * 0.975), w * 0.84, Y(top * 0.88) - Y(top * 0.975)); }
+    winRegions.push({ x0: x0 + w * 0.08, x1: x0 + w * 0.92, yT: Y(top * 0.875), taper: 0 });
+  } else if (type === 'pyramid') {
+    const yR = Y(top * 0.8);
+    ctx.beginPath(); ctx.moveTo(x0, Yb); ctx.lineTo(cx - w * 0.06, yR); ctx.lineTo(cx - w * 0.025, yT); ctx.lineTo(cx + w * 0.025, yT); ctx.lineTo(cx + w * 0.06, yR); ctx.lineTo(x0 + w, Yb); ctx.closePath(); ctx.fill();
+    winRegions.push({ x0, x1: x0 + w, yT: Y(top * 0.74), taper: 1, cx, yR });
+  } else if (type === 'spire') {
+    ctx.fillRect(x0, Y(top * 0.84), w, Yb - Y(top * 0.84));
+    ctx.beginPath(); ctx.moveTo(x0, Y(top * 0.84)); ctx.lineTo(cx - w * 0.18, Y(top * 0.9)); ctx.lineTo(cx, Y(top)); ctx.lineTo(cx + w * 0.18, Y(top * 0.9)); ctx.lineTo(x0 + w, Y(top * 0.84)); ctx.closePath(); ctx.fill();
+    winRegions.push({ x0, x1: x0 + w, yT: Y(top * 0.83), taper: 0 });
+  } else if (type === 'twin') {
+    ctx.fillRect(x0, Y(top * 0.86), w, Yb - Y(top * 0.86));
+    ctx.fillRect(cx - w * 0.32, yT, Math.max(1, w * 0.07), Y(top * 0.86) - yT);
+    ctx.fillRect(cx + w * 0.25, yT, Math.max(1, w * 0.07), Y(top * 0.86) - yT);
+    winRegions.push({ x0, x1: x0 + w, yT: Y(top * 0.85), taper: 0 });
+  } else if (type === 'slab') {
+    ctx.fillRect(x0, Y(top * 0.9), w, Yb - Y(top * 0.9));
+    ctx.fillRect(x0 + w * 0.35, yT, w * 0.65, Y(top * 0.9) - yT);
+    winRegions.push({ x0, x1: x0 + w, yT: Y(top * 0.9), taper: 0 });
+  } else {
+    ctx.fillRect(x0, yT, w, Yb - yT);
+    ctx.fillRect(cx - w * 0.2, yT - Math.max(1, pxV * 0.05), w * 0.4, Math.max(1, pxV * 0.05));
+    winRegions.push({ x0, x1: x0 + w, yT: yT + 2, taper: 0 });
+  }
+}
+
+let suspAll = [], bbSegs = [], sutroInfo = null, beaconList = [];
+
+function makeLayers() {
+  const cw = Math.round(W * scale), ch = Math.round(H * scale);
+  [maskC, mask2C, midBlack, nearBlack, lightsC].forEach(c => { c.width = cw; c.height = ch; });
+  const mk = c => { const x = c.getContext('2d'); x.setTransform(scale, 0, 0, scale, 0, 0); return x; };
+  const m = mk(maskC), m2 = mk(mask2C), mb = mk(midBlack), nb = mk(nearBlack);
+  m.fillStyle = '#000'; m.fillRect(0, 0, W, H); m2.fillStyle = '#000'; m2.fillRect(0, 0, W, H); mb.clearRect(0, 0, W, H); nb.clearRect(0, 0, W, H);
+  m.globalCompositeOperation = 'lighter'; m2.globalCompositeOperation = 'lighter';
+
+  // ---- FAR (red channel) ----
+  const far = document.createElement('canvas'); far.width = cw; far.height = ch;
+  const f = mk(far); f.fillStyle = '#fff'; f.strokeStyle = '#fff';
+  smoothRidge(f, FAR_SF, 0.07, 11);
+  smoothRidge(f, MARIN, 0.05, 12);
+  sutroInfo = drawSutro(f);
+  drawGG(f, false);
+  const ggp = document.createElement('canvas'); ggp.width = cw; ggp.height = ch;
+  const gp = mk(ggp); gp.fillStyle = '#fff'; gp.strokeStyle = '#fff'; drawGG(gp, true);
+
+  // ---- MID (green channel) ----
+  const mid = document.createElement('canvas'); mid.width = cw; mid.height = ch;
+  const g = mk(mid); g.fillStyle = '#fff'; g.strokeStyle = '#fff';
+  const flood = document.createElement('canvas'); flood.width = cw; flood.height = ch;
+  const fl = mk(flood); fl.fillStyle = '#fff';
+  const crown = document.createElement('canvas'); crown.width = cw; crown.height = ch;
+  const cr = mk(crown); cr.fillStyle = '#fff';
+  const winRegions = [];
+  const rnd = mulberry(77);
+  // filler towers behind the named ones
+  for (let a = 199.2; a < 224; a += 0.32 + rnd() * 0.35) {
+    const top = 0.9 + rnd() * 1.1 * (1 - Math.abs(a - 212) / 16);
+    const hw = 0.1 + rnd() * 0.16;
+    drawBuilding(g, [a, Math.max(0.8, top), hw, 'flat'], null, winRegions);
+  }
+  DOWNTOWN.forEach(b => drawBuilding(g, b, b[3] === 'obelisk' ? cr : null, winRegions));
+  // city fabric: hills built up with blocks
+  smoothRidge(g, CITY, 0.05, 21);
+  const fabric = [];
+  for (let a = 197; a < 260; ) {
+    const bw = 0.12 + rnd() * 0.3;
+    const base = interp(CITY, a + bw / 2);
+    if (base > 0.03) {
+      const extra = (0.04 + rnd() * 0.22) * (a < 226 ? 1.25 : 0.8);
+      const x0 = X(a), x1 = X(a + bw);
+      g.fillRect(x0, Y(base + extra), x1 - x0 + 0.4, Yb - Y(base + extra));
+      fabric.push({ x0, x1, yT: Y(base + extra) + 1, taper: 0, sparse: true });
+    }
+    a += bw;
+  }
+  // Coit Tower on Telegraph Hill (floodlit at night)
+  const coitW = Math.max(2.6, 0.2 * pxH * wx);
+  g.fillRect(X(232.3) - coitW / 2, Y(2.44), coitW, Y(1.3) - Y(2.44));
+  g.fillRect(X(232.3) - coitW * 0.62, Y(2.44), coitW * 1.24, Math.max(1, pxV * 0.06));
+  fl.fillRect(X(232.3) - coitW / 2, Y(2.44), coitW, Y(1.3) - Y(2.44));
+  // Ferry Building: long shed + clock tower
+  g.fillRect(X(209.1), Y(0.36), X(211.5) - X(209.1), Yb - Y(0.36));
+  const fbW = Math.max(2.2, 0.17 * pxH * wx);
+  g.fillRect(X(210.3) - fbW / 2, Y(1.05), fbW, Y(0.36) - Y(1.05));
+  g.beginPath(); g.moveTo(X(210.3) - fbW * 0.35, Y(1.05)); g.lineTo(X(210.3), Y(1.28)); g.lineTo(X(210.3) + fbW * 0.35, Y(1.05)); g.closePath(); g.fill();
+  fl.fillRect(X(210.3) - fbW / 2, Y(1.05), fbW, Y(0.36) - Y(1.05));
+  // Alcatraz: island, cellhouse, lighthouse
+  smoothRidge(g, ALCATRAZ, 0.02, 31);
+  g.fillRect(X(276.9), Y(0.68), X(278.5) - X(276.9), Y(0.4) - Y(0.68));
+  const lhW = Math.max(1.6, 0.06 * pxH * wx);
+  g.fillRect(X(277.25) - lhW / 2, Y(0.88), lhW, Y(0.5) - Y(0.88));
+  // Angel Island
+  smoothRidge(g, ANGEL, 0.06, 41);
+
+  // ---- NEAR (blue channel) ----
+  const near = document.createElement('canvas'); near.width = cw; near.height = ch;
+  const n = mk(near); n.fillStyle = '#fff'; n.strokeStyle = '#fff';
+  smoothRidge(n, YBI, 0.09, 51);
+  bbSegs = drawBayBridge(n);
+
+  // ---- compose into channel masks ----
+  const tint = (dst, src, color) => {
+    const t = document.createElement('canvas'); t.width = cw; t.height = ch;
+    const tc = t.getContext('2d'); tc.drawImage(src, 0, 0); tc.globalCompositeOperation = 'source-in'; tc.fillStyle = color; tc.fillRect(0, 0, cw, ch);
+    dst.setTransform(1, 0, 0, 1, 0, 0); dst.drawImage(t, 0, 0); dst.setTransform(scale, 0, 0, scale, 0, 0);
+  };
+  tint(m, far, '#ff0000'); tint(m, mid, '#00ff00'); tint(m, near, '#0000ff');
+  tint(m2, ggp, '#ff0000'); tint(m2, flood, '#00ff00'); tint(m2, crown, '#0000ff');
+  tint(mb, mid, '#000000'); tint(mb, near, '#000000');
+  tint(nb, near, '#000000');
+
+  // ---- lights that never move: windows, binned by the sun elevation that switches them on ----
+  const mkBins = () => BIN_E.map(() => { const c = document.createElement('canvas'); c.width = cw; c.height = ch; const x = mk(c); x.globalCompositeOperation = 'lighter'; return { c, x }; });
+  farBins = mkBins(); midBins = mkBins();
+  const rw = mulberry(99);
+  const floor = Math.max(2.2, pxV * 0.052), col = Math.max(1.9, pxH * wx * 0.05);
+  const warm = ['255,212,150', '255,224,178', '214,230,255', '255,236,205', '200,222,255'];
+  const putWin = (bins, x, y, s, a) => {
+    const bi = Math.min(BIN_E.length - 1, Math.floor(rw() * BIN_E.length * 1.0));
+    const c = warm[Math.floor(rw() * warm.length)];
+    bins[bi].x.fillStyle = 'rgba(' + c + ',' + a.toFixed(2) + ')';
+    bins[bi].x.fillRect(x, y, s, s * 0.95);
+  };
+  winRegions.concat(fabric).forEach(r => {
+    const dens = r.sparse ? 0.1 : 0.26;
+    const tint = rw() < 0.62 ? (rw() < 0.5 ? '255,206,140' : '255,226,180') : (rw() < 0.6 ? '206,224,255' : '232,240,255');
+    for (let y = r.yT + 1; y < Yb - 2; y += floor) {
+      let x0 = r.x0 + 1, x1 = r.x1 - 1;
+      if (r.taper) { const t = clamp((Yb - y) / (Yb - r.yR), 0, 1); const half = lerp((r.x1 - r.x0) / 2, (r.x1 - r.x0) * 0.06, t) - 1; x0 = r.cx - half; x1 = r.cx + half; }
+      for (let x = x0; x < x1; ) {
+        if (rw() < dens) {
+          const run = 1 + Math.floor(rw() * (r.sparse ? 2 : 5));
+          const bi = Math.min(BIN_E.length - 1, Math.floor(rw() * BIN_E.length));
+          const a = (r.sparse ? 0.2 : 0.3) + rw() * 0.45;
+          midBins[bi].x.fillStyle = 'rgba(' + tint + ',' + a.toFixed(2) + ')';
+          for (let k = 0; k < run && x < x1; k++, x += col) midBins[bi].x.fillRect(x, y, 1.05, 1);
+        } else x += col;
+      }
+    }
+  });
+  // far hills: houses on the SF ridges, Sausalito, Tiburon
+  const farZones = [[188, 222, FAR_SF, 0.18], [236, 259.5, FAR_SF, 0.3], [283, 295, MARIN, 0.32], [296.5, 304.5, MARIN, 0.22]];
+  farZones.forEach(([a0, a1, pts, dens]) => {
+    for (let a = a0; a < a1; a += 1.6 / pxH) {
+      const top = interp(pts, a) - 0.06;
+      for (let g2 = 0.04; g2 < top; g2 += 1.9 / pxV) if (rw() < dens * 0.32) putWin(farBins, X(a), Y(g2), 0.9, 0.22 + rw() * 0.45);
+    }
+  });
+
+  // ---- light fixtures ----
+  beaconList = [];
+  const red = (x, y, kind, ph, size) => beaconList.push({ x, y, kind, ph, size: size || 1.6, col: '255,52,40' });
+  [262.9, 273.3].forEach((az, i) => { red(X(az) - Math.max(4.2, 0.24 * pxH * wx) * 0.35, Y(1.43), 'pulse', i * 0.7, 1.4); red(X(az) + Math.max(4.2, 0.24 * pxH * wx) * 0.35, Y(1.43), 'pulse', i * 0.7 + 0.2, 1.4); });
+  if (sutroInfo) {
+    const s = sutroInfo;
+    red(s.cx, s.yT, 'pulse', 0.1, 1.8); red(s.cx - s.w0 * 0.13, s.yT + s.hgt * 0.06, 'pulse', 0.4, 1.5); red(s.cx + s.w0 * 0.13, s.yT + s.hgt * 0.06, 'pulse', 0.7, 1.5);
+    red(s.cx - s.w0 * 0.26, s.yB - s.hgt * 0.64, 'steady', 0, 1.3); red(s.cx + s.w0 * 0.26, s.yB - s.hgt * 0.64, 'steady', 0, 1.3);
+    red(s.cx - s.w0 * 0.3, s.yB - s.hgt * 0.3, 'steady', 0, 1.2); red(s.cx + s.w0 * 0.3, s.yB - s.hgt * 0.3, 'steady', 0, 1.2);
+  }
+  const farBeaconCount = beaconList.length;
+  red(X(209.4), Y(4.59) - 1, 'steady', 0, 1.7);
+  red(X(220.4), Y(3.87) - 1, 'pulse', 0.3, 1.6);
+  red(X(206.9), Y(3.54) - 1, 'steady', 0, 1.4);
+  red(X(218.1), Y(3.25) - 1, 'steady', 0, 1.3);
+  red(X(201.6), Y(2.5) - 1, 'steady', 0, 1.2);
+  beacons = { far: beaconList.slice(0, farBeaconCount), mid: beaconList.slice(farBeaconCount), near: [] };
+  BB_TOWERS.forEach(([az, ang, d], i) => {
+    const w = Math.max(5, Math.atan(0.03 / d) * R2D * pxH * wx * 0.9);
+    beacons.near.push({ x: X(az) - w / 2 + 0.8, y: Y(ang) - 1, kind: 'pulse', ph: i * 0.37, size: 1.5, col: '255,52,40' });
+    beacons.near.push({ x: X(az) + w / 2 - 0.8, y: Y(ang) - 1, kind: 'pulse', ph: i * 0.37 + 0.15, size: 1.5, col: '255,52,40' });
+  });
+
+  // Golden Gate deck lights (far) and Bay Bridge roadway lights (near)
+  deckLights = { gg: [], bb: [] };
+  for (let a = 259.4; a < 276.6; a += 2.8 / pxH) deckLights.gg.push([X(a), Y(0.445)]);
+  for (let a = 166.4; a < 200.4; a += 4.2 / pxH) deckLights.bb.push([X(a), Y(interp(BB_DECK, a)) + 0.4]);
+  // Bay Lights suspenders, spaced along every suspension segment
+  suspAll = [];
+  const span = X(198.4) - X(166.4);
+  bbSegs.forEach((s, si) => {
+    const step = Math.max(2.4, 3.2 * (pxH / 13));
+    for (let x = s.x1 + step * 0.5; x < s.x2 - 0.5; x += step) {
+      const t = (x - s.x1) / (s.x2 - s.x1);
+      const yc = quadY(s.y1, s.cy, s.y2, t);
+      const yd = Y(interp(BB_DECK, azOf(x))) - 0.5;
+      if (yd - yc > 2.5) suspAll.push({ x, yc, yd, u: clamp((x - X(166.4)) / span, 0, 1), h: hash1(x * 3.7 + si) });
+    }
+  });
+  // waterfront lights along the city shore
+  shoreLights = [];
+  for (let a = 199; a < 259.5; a += 3.1 / pxH) { const r3 = rw(); if (r3 < 0.75) shoreLights.push([X(a) + (rw() - 0.5), Y(0.03 + rw() * 0.06), 0.35 + rw() * 0.5]); }
+  // Bay Bridge traffic
+  traffic = [];
+  for (let i = 0; i < 58; i++) traffic.push({ s: rw(), v: 0.006 + rw() * 0.004, up: i < 34, tail: rw() < 0.72 });
+}
+let traffic = [];
+
+function layout() {
+  W = innerWidth; H = innerHeight;
+  scale = Math.min(window.devicePixelRatio || 1, perfCap);
+  const portrait = H > W;
+  pxH = clamp(W / 105, 7, 18);
+  pxV = Math.min(clamp(H * 0.05, 26, 58), pxH * 4.2);
+  horizonY = Math.round(H * (portrait ? 0.62 : 0.66));
+  Yb = horizonY + 1.5;
+  const fov = W / pxH;
+  let lo = Infinity, hi = -Infinity;
+  for (let m = M0; m <= 18; m += 4) { const a = solar(mToMs(m)).az; lo = Math.min(lo, a); hi = Math.max(hi, a); }
+  lo -= 7; hi += 7;
+  const pref = portrait ? 262 : 231;
+  const cmin = hi - fov / 2, cmax = lo + fov / 2;
+  center = cmin <= cmax ? clamp(pref, cmin, cmax) : (lo + hi) / 2;
+  wx = clamp(pxV / pxH * 0.55, 1, 2.6);
+  sunR = clamp(pxV * 0.5, 13, 27);
+  canvas.width = Math.round(W * scale); canvas.height = Math.round(H * scale);
+  makeLayers();
+  if (gl) uploadStatic();
+}
+
+/* ================= palette (rows by sun elevation) ================= */
+const KE = [12, 6, 2, 0, -2, -4, -6, -9, -12, -18];
+const PAL = [
+  ['#F4DDB4', '#F7C98E', '#FFA35A', '#FF7F45', '#F0603A', '#C9483E', '#8A3A44', '#4A2D45', '#2A2340', '#2A1F33'], // 0 horizon
+  ['#ECE0C9', '#F1D6AE', '#F6C48A', '#F7B26E', '#F39B5F', '#DA7A55', '#A85A4F', '#4F3A4C', '#262640', '#1C1A30'], // 1 low sky
+  ['#A3BCD9', '#9FB2CF', '#A9B5C2', '#B4B7B3', '#A6A9A8', '#7F8B98', '#4F5F7A', '#2A3658', '#172040', '#0E1530'], // 2 mid sky
+  ['#3A6BB0', '#305EA6', '#2B5398', '#26478A', '#213E7C', '#1B3369', '#152957', '#0E1C45', '#0A1433', '#060C22'], // 3 zenith
+  ['#FFF0C8', '#FFD38A', '#FFA552', '#FF8040', '#FF6236', '#E8484A', '#A8405C', '#5A3150', '#2C2440', '#1A1528'], // 4 glow
+  ['#FFF1D8', '#FFDDAA', '#FFB27A', '#FF9468', '#FF7A6A', '#F0608A', '#B8508A', '#4A3558', '#2A2440', '#241C30'], // 5 cloud, lit
+  ['#7A7C92', '#5E5A73', '#4E4462', '#3F3555', '#342C4C', '#2B2643', '#221F3B', '#1A1932', '#14152A', '#121222'], // 6 cloud, shade
+  ['#F1E2D4', '#EFCFB5', '#F0B9A0', '#E8A190', '#D6979A', '#BC8C9A', '#927689', '#62566C', '#4A4056', '#42384A'], // 7 fog
+  ['#1E2737', '#1A2032', '#191C2E', '#171A2B', '#141729', '#111426', '#0E1122', '#0B0E1D', '#080B18', '#060914'], // 8 ink
+  ['#FFF6E0', '#FFE7B0', '#FFC77A', '#FFA052', '#FF7A40', '#FF5A36', '#FF5A36', '#FF5A36', '#FF5A36', '#FF5A36']  // 9 sun
+];
+const hexRGB = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+function palAt(row, e) {
+  const ks = PAL[row];
+  if (e >= KE[0]) return hexRGB(ks[0]);
+  for (let i = 1; i < KE.length; i++) if (e >= KE[i]) { const t = (KE[i - 1] - e) / (KE[i - 1] - KE[i]); const a = hexRGB(ks[i - 1]), b = hexRGB(ks[i]); return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]; }
+  return hexRGB(ks[ks.length - 1]);
+}
+function makePalette() {
+  const c = document.createElement('canvas'); c.width = 128; c.height = PAL.length;
+  const x = c.getContext('2d'); const img = x.createImageData(128, PAL.length);
+  for (let r = 0; r < PAL.length; r++) for (let i = 0; i < 128; i++) {
+    const e = 12 - i / 127 * 32; const v = palAt(r, e); const o = (r * 128 + i) * 4;
+    img.data[o] = v[0]; img.data[o + 1] = v[1]; img.data[o + 2] = v[2]; img.data[o + 3] = 255;
+  }
+  x.putImageData(img, 0, 0); return c;
+}
+
+/* ================= WebGL ================= */
+const VS = `#version 300 es
+in vec2 aP; void main(){ gl_Position = vec4(aP, 0.0, 1.0); }`;
+const FS = `#version 300 es
+precision highp float;
+uniform vec2 uRes; uniform float uScale; uniform float uTime; uniform float uMotion;
+uniform vec2 uSun; uniform float uSunR; uniform float uE;
+uniform float uHorizon; uniform float uPxV; uniform float uPxH; uniform float uCenterAz;
+uniform float uFog; uniform float uGateAz;
+uniform sampler2D uPal; uniform sampler2D uMask; uniform sampler2D uMask2; uniform sampler2D uLights;
+out vec4 outColor;
+
+float ss(float a, float b, float x){ float t = clamp((x - a)/(b - a), 0., 1.); return t*t*(3. - 2.*t); }
+float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.-2.*f);
+  float a = hash12(i), b = hash12(i+vec2(1.,0.)), c = hash12(i+vec2(0.,1.)), d = hash12(i+vec2(1.,1.));
+  return mix(mix(a,b,u.x), mix(c,d,u.x), u.y); }
+float fbm(vec2 p){ float s = 0., a = .5; for (int i = 0; i < 4; i++){ s += a*vnoise(p); p = p*2.03 + vec2(17.1, 9.3); a *= .5; } return s/.9375; }
+vec3 pal(float row, float e){ float u = clamp((12. - e)/32., 0., 1.); return texture(uPal, vec2(u*(127./128.) + .5/128., (row + .5)/10.)).rgb; }
+
+float fogDensity(float az, float h){
+  if (uFog <= .001) return 0.;
+  float da = abs(az - uGateAz);
+  float spread = mix(3., 42., uFog);
+  float cov = 1. - ss(spread*.5, spread, da);
+  if (cov <= 0.) return 0.;
+  float t = uTime*uMotion;
+  float top = mix(.35, 1.18, uFog) * (1. - .45*ss(0., spread, da));
+  top += (fbm(vec2(az*.32 - t*.035, t*.01)) - .5)*.6;
+  float body = ss(top + .12, top - .2, h) * ss(-.6, -.12, h);
+  float tex = .62 + .38*fbm(vec2(az*.9 - t*.07, h*2.6 + t*.02));
+  return clamp(cov*body*tex*ss(0., .3, uFog), 0., 1.)*.94;
+}
+
+vec3 sky(vec2 p, float h, float az, float W){
+  float top = uHorizon/uPxV;
+  float v = clamp(h/top, 0., 1.2);
+  vec3 c = mix(pal(0., uE), pal(1., uE), ss(0., .12, v));
+  c = mix(c, pal(2., uE), ss(.08, .42, v));
+  c = mix(c, pal(3., uE), ss(.3, 1.05, v));
+  vec3 glow = pal(4., uE);
+  vec2 d2 = p - uSun;
+  float dist = length(d2*vec2(.6, 1.))/uHorizon;
+  float gA = mix(.35, 1., ss(10., 0., uE))*ss(-11., -1., uE);
+  c += glow*gA*(.5*exp(-dist*9.) + .3*exp(-dist*3.2));
+  float bandA = ss(9., 0., uE)*ss(-13., -3., uE);
+  float bx = exp(-abs(p.x - uSun.x)/(W*.38));
+  c = mix(c, glow*1.04, bandA*bx*exp(-max(h, 0.)/1.4)*.7);
+  float night = ss(-8., -14., uE);
+  c += vec3(.10, .06, .07)*night*exp(-max(h, 0.)/1.2);            // city sky glow
+  // clouds: streaky, lit from below after sunset; higher ones stay lit longer
+  float D = 0.;
+  float band = ss(1.6, 3.2, h)*(1. - ss(9., 12.5, h));
+  float t = uTime*uMotion;
+  if (band > 0.){
+    vec2 q = vec2(az*.07 + t*.004, h*1.45);
+    float n = fbm(q + vec2(0., fbm(q*.6)*.8));
+    float dens = ss(.5, .78, n)*band;
+    float n2 = fbm(vec2(az*.05 - t*.002, h*.35 + 3.1));
+    float dens2 = ss(.56, .8, n2)*ss(5., 8., h)*.55;
+    D = clamp(dens + dens2*(1. - dens), 0., 1.);
+    if (D > .001){
+      float eC = uE + h*.3;
+      vec3 lit = pal(5., eC), shade = pal(6., uE);
+      float under = ss(4., .5, eC)*ss(-9.5, -3., eC);
+      float back = ss(.5, 4., uE);
+      float rim = exp(-length(d2*vec2(.5, 1.))/(uHorizon*.35))*(1. - dens*.7);
+      vec3 cc = mix(shade, lit, under*(.55 + .45*(1. - dens)));
+      cc += lit*rim*back*.9;
+      cc += vec3(.16, .10, .09)*night*.6;
+      c = mix(c, cc, D*.92);
+    }
+  }
+  float sa = ss(-8., -14., uE)*ss(.8, 5., h)*(1. - D);
+  if (sa > 0.){
+    vec2 g = floor(p/2.); float r = hash12(g);
+    if (r > .9972){ float tw = .65 + .35*sin(t*(1. + r*3.) + r*40.); vec2 f = fract(p/2.) - .5;
+      c += vec3(.85, .9, 1.)*ss(.55, 0., length(f))*tw*sa*(r - .9972)*360.; }
+  }
+  float sq = 1. - .2*ss(2.5, -.5, uE);
+  vec2 sd = vec2(d2.x, d2.y/sq);
+  float sdist = length(sd);
+  float disc = ss(uSunR + 1.2, uSunR - 1.2, sdist);
+  float limb = 1. - .3*pow(clamp(sdist/uSunR, 0., 1.), 3.);
+  vec3 sc = pal(9., uE);
+  c = mix(c, sc*limb*1.1, disc*(1. - D*.6));
+  c += sc*.5*exp(-max(sdist - uSunR, 0.)/(uSunR*.9))*ss(-2., 1., uE)*(1. - D*.4);
+  return c;
+}
+
+vec3 scene(vec2 p, float W, float Hh, out float fogD, out float mn){
+  float h = (uHorizon - p.y)/uPxV;
+  float az = uCenterAz + (p.x - W*.5)/uPxH;
+  vec3 c = sky(p, h, az, W);
+  vec2 uv = p/vec2(W, Hh);
+  vec3 m = texture(uMask, uv).rgb;
+  vec3 m2 = texture(uMask2, uv).rgb;
+  vec3 ma = texture(uMask, uv - vec2(0., 1.6/Hh)).rgb;
+  float night = ss(-4., -12., uE);
+  float lightsOn = ss(-1.5, -7., uE);
+  vec3 hor = pal(0., uE), ink = pal(8., uE), glow = pal(4., uE);
+  float nearSun = exp(-abs(p.x - uSun.x)/(W*.22));
+  float rimA = ss(-1.5, 1.5, uE)*(1. - ss(9., 14., uE));
+  float sunLit = ss(-6., 2., uE);
+  vec3 farC = mix(ink, hor, .5 - .25*night);
+  farC = mix(farC, glow, .22*nearSun*sunLit);
+  farC += glow*m.r*(1. - ma.r)*rimA*nearSun*.9;
+  c = mix(c, farC, m.r);
+  c += vec3(.36, .08, .04)*m2.r*m.r*.22*ss(-3., 3., uE);
+  c += vec3(.78, .24, .12)*m2.r*m.r*.6*lightsOn;
+  fogD = fogDensity(az, h);
+  if (fogD > 0.){
+    vec3 fc = pal(7., uE) + vec3(.26, .14, .07)*night*(1. - clamp(h/1.3, 0., 1.));
+    fc = mix(fc, glow, .25*nearSun*sunLit);
+    c = mix(c, fc, fogD);
+  }
+  vec3 midC = mix(ink, hor, .26 - .16*night);
+  midC += glow*m.g*(1. - ma.g)*rimA*nearSun*.8;
+  c = mix(c, midC, m.g);
+  c += vec3(1., .86, .64)*m2.g*m.g*.5*lightsOn;
+  if (m2.b > .01){
+    vec2 cell = floor(p/2.4);
+    float t = uTime*uMotion;
+    float img = ss(.38, .78, fbm(cell*vec2(.2, .34) + vec2(t*.22, t*.05)));
+    vec2 f = fract(p/2.4) - .5;
+    float dotm = ss(.55, .15, length(f));
+    c += vec3(.82, .9, 1.)*m2.b*img*(.35 + .65*dotm)*lightsOn*.95;
+  }
+  vec3 nearC = mix(ink, hor, .14 - .1*night);
+  nearC += glow*m.b*(1. - ma.b)*rimA*nearSun*.7;
+  c = mix(c, nearC, m.b);
+  mn = clamp(m.g + m.b, 0., 1.);
+  return c;
+}
+
+void main(){
+  vec2 cs = uRes/uScale; float W = cs.x, Hh = cs.y;
+  vec2 p = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y)/uScale;
+  vec2 uv = p/cs;
+  float fogD = 0., mn = 0.;
+  vec3 c;
+  vec3 L = texture(uLights, uv).rgb;
+  float t = uTime*uMotion;
+  if (p.y <= uHorizon){
+    c = scene(p, W, Hh, fogD, mn);
+    c += L*mix(1. - fogD*.92, 1., step(.5, mn));
+  } else {
+    float depth = (p.y - uHorizon)/(Hh - uHorizon);
+    float Z = 1./(depth + .03);
+    vec2 wq = vec2((p.x - W*.5)/W*Z*2.6, Z*1.15);
+    float n1 = fbm(wq + vec2(0., -t*.32));
+    float n2 = fbm(wq*1.7 + vec2(5.2, t*.22));
+    float n3 = vnoise(vec2(p.x*.035, Z*6. - t*1.1));
+    float offY = (n1 - .5)*(6. + 60.*depth) + (n3 - .5)*(2. + 12.*depth);
+    float offX = (n2 - .5)*(3. + 20.*depth);
+    vec2 mp = vec2(p.x + offX, min(uHorizon - (p.y - uHorizon) + offY, uHorizon - .5));
+    vec3 r = scene(mp, W, Hh, fogD, mn);
+    float fres = mix(.9, .52, pow(depth, .55));
+    vec3 base = mix(pal(8., uE), pal(3., uE)*.5, .35);
+    c = mix(base, r, fres);
+    float sunUp = ss(-1., .2, (uHorizon - uSun.y + uSunR)/uPxV);
+    float gw = uSunR*.9 + 110.*depth;
+    float colm = exp(-abs(p.x - uSun.x)/gw);
+    float sp = pow(vnoise(vec2(p.x*.13, p.y*1.1 - t*2.6)), 26.)*7.;
+    c += pal(9., uE)*colm*sp*sunUp*(1. - depth*.5);
+    vec3 Lr = vec3(0.);
+    float st = 1.4 + 7.*depth;
+    for (int i = -3; i <= 3; i++){
+      vec2 q = vec2(mp.x + (n2 - .5)*3.*float(i), mp.y + float(i)*st);
+      Lr += textureLod(uLights, q/cs, 1.).rgb;
+    }
+    Lr /= 7.;
+    float shimmer = .5 + .9*vnoise(vec2(p.x*.08, p.y*.9 - t*2.));
+    c += Lr*shimmer*1.7*(1. - depth*.35);
+    c += L;
+  }
+  vec3 bloom = textureLod(uLights, uv, 2.5).rgb*.32 + textureLod(uLights, uv, 4.).rgb*.48 + textureLod(uLights, uv, 5.5).rgb*.45;
+  c += bloom*(1. - .55*fogD);
+  c = max(c, 0.);
+  vec3 over = max(c - .82, 0.);
+  c = min(c, vec3(.82)) + .18*(1. - exp(-over/.18));
+  vec2 vv = (uv - .5)*vec2(1.1, 1.4);
+  c *= 1. - .2*dot(vv, vv);
+  c += (hash12(gl_FragCoord.xy + fract(uTime*7.)*91.) - .5)*(3./255.);
+  outColor = vec4(c, 1.);
+}`;
+
+let gl = null, prog = null, U = {}, tex = {};
+function initGL() {
+  try { gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false, premultipliedAlpha: false, powerPreference: 'high-performance' }); } catch (e) { gl = null; }
+  if (!gl) return false;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); return null; } return s; };
+  const vs = sh(gl.VERTEX_SHADER, VS), fs = sh(gl.FRAGMENT_SHADER, FS);
+  if (!vs || !fs) { gl = null; return false; }
+  prog = gl.createProgram(); gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(prog)); gl = null; return false; }
+  gl.useProgram(prog);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'aP'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  ['uRes', 'uScale', 'uTime', 'uMotion', 'uSun', 'uSunR', 'uE', 'uHorizon', 'uPxV', 'uPxH', 'uCenterAz', 'uFog', 'uGateAz', 'uPal', 'uMask', 'uMask2', 'uLights'].forEach(n => { U[n] = gl.getUniformLocation(prog, n); });
+  const mkTex = (unit, mip) => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mip ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
+  tex.pal = mkTex(0, false); tex.mask = mkTex(1, false); tex.mask2 = mkTex(2, false); tex.lights = mkTex(3, true);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex.pal);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, makePalette());
+  gl.uniform1i(U.uPal, 0); gl.uniform1i(U.uMask, 1); gl.uniform1i(U.uMask2, 2); gl.uniform1i(U.uLights, 3);
+  canvas.addEventListener('webglcontextlost', ev => { ev.preventDefault(); gl = null; showFallback(); });
+  return true;
+}
+let lightsAllocated = false;
+function uploadStatic() {
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, tex.mask);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, maskC);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, tex.mask2);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, mask2C);
+  lightsAllocated = false;
+}
+function showFallback() {
+  canvas.hidden = true;
+  document.getElementById('fallback').hidden = false;
+  capBody.innerHTML = '<p>This browser couldn’t start WebGL 2, so the live sky is replaced by a still. The times and the sun position are still calculated for San Francisco today.</p>';
+}
+
+/* ================= lights, drawn every frame ================= */
+function baysPattern(u, v, i, h, t) {
+  if (reduce) return 0.55;
+  const cyc = (t / 18) % 3, mode = Math.floor(cyc), fr = cyc - mode, k = smooth(0.82, 1, fr);
+  const pat = md => {
+    if (md === 0) { const f = (v * 1.3 - t * 0.5 + h * 7.3) % 1; const ff = f < 0 ? f + 1 : f; return Math.max(0, 1 - ff * 5.5); }
+    if (md === 1) return 0.12 + 0.88 * Math.pow(0.5 + 0.5 * Math.sin((u * 9 - t * 0.7) * 6.2832 + v * 1.2), 6);
+    const s = hash1(i * 13.1 + Math.floor(t * 5 + h * 4)); return s > 0.8 ? 1 : 0.08 + v * 0.1;
+  };
+  return lerp(pat(mode), pat((mode + 1) % 3), k);
+}
+function drawLights(e, m, t) {
+  const c = lightsCtx;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1;
+  c.fillStyle = '#000'; c.fillRect(0, 0, lightsC.width, lightsC.height);
+  const on = smooth(-1.5, -7, e);
+  const tm = reduce ? 0 : t;
+  c.globalCompositeOperation = 'lighter';
+  const bins = list => list.forEach((b, i) => { const a = clamp((BIN_E[i] - e) / 1.3, 0, 1); if (a > 0.01) { c.globalAlpha = a; c.drawImage(b.c, 0, 0); } });
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  bins(farBins);
+  c.setTransform(scale, 0, 0, scale, 0, 0);
+  const beacon = b => {
+    let a = b.kind === 'pulse' ? 0.35 + 0.65 * Math.pow(0.5 + 0.5 * Math.sin(tm * 2.2 + b.ph * 6.28), 3) : 0.85;
+    a *= 0.25 + 0.75 * on;
+    c.globalAlpha = clamp(a, 0, 1); c.fillStyle = 'rgb(' + b.col + ')';
+    c.beginPath(); c.arc(b.x, b.y, b.size * 0.75, 0, 6.2832); c.fill();
+  };
+  beacons.far.forEach(beacon);
+  if (on > 0.01) {
+    c.globalAlpha = on * 0.8; c.fillStyle = 'rgb(255,190,110)';
+    deckLights.gg.forEach(([x, y]) => c.fillRect(x - 0.45, y - 0.45, 0.9, 0.9));
+  }
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1; c.drawImage(midBlack, 0, 0);
+  c.globalCompositeOperation = 'lighter';
+  bins(midBins);
+  c.setTransform(scale, 0, 0, scale, 0, 0);
+  beacons.mid.forEach(beacon);
+  if (on > 0.01) {
+    c.fillStyle = 'rgb(255,200,130)';
+    shoreLights.forEach(([x, y, a]) => { c.globalAlpha = a * on; c.fillRect(x - 0.5, y - 0.5, 1, 1); });
+    // Ferry Building clock face
+    c.globalAlpha = on * 0.9; c.fillStyle = 'rgb(255,236,200)';
+    c.beginPath(); c.arc(X(210.3), Y(0.92), Math.max(0.9, pxV * 0.022), 0, 6.2832); c.fill();
+    // Alcatraz light: one white flash every five seconds
+    const ph = (tm % 5) / 5, fl = reduce ? 0.6 : Math.exp(-ph * 18) + 0.06;
+    c.globalAlpha = clamp(fl * on, 0, 1); c.fillStyle = 'rgb(255,250,235)';
+    c.beginPath(); c.arc(X(277.25), Y(0.9), 1.3 + fl * 1.6, 0, 6.2832); c.fill();
+    // a ferry crossing in front of the city
+    const fa = 0.2 * on;
+    if (fa > 0.01) {
+      const s = ((tm * 0.0045) + 0.35) % 1, az = lerp(214, 252, s), fx = X(az), fy = horizonY + Math.max(3, pxV * 0.09);
+      c.globalAlpha = on * 0.95; c.fillStyle = 'rgb(255,214,160)';
+      for (let i = 0; i < 6; i++) c.fillRect(fx - 4 + i * 1.5, fy - 1.2, 0.9, 0.9);
+      c.fillStyle = 'rgb(235,245,255)'; c.fillRect(fx - 1, fy - 3.6, 0.9, 0.9);
+      c.fillStyle = 'rgb(90,255,140)'; c.fillRect(fx + 4.4, fy - 1.4, 0.9, 0.9);
+      c.globalAlpha = on * 0.25; c.fillStyle = 'rgb(255,200,140)';
+      for (let k = 1; k < 7; k++) c.fillRect(fx - 4 + ((k * 37) % 9), fy + k * 1.7, 1, 1.2);
+    }
+  }
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1; c.drawImage(nearBlack, 0, 0);
+  c.globalCompositeOperation = 'lighter';
+  c.setTransform(scale, 0, 0, scale, 0, 0);
+  beacons.near.forEach(beacon);
+  if (on > 0.01) {
+    c.globalAlpha = on * 0.75; c.fillStyle = 'rgb(255,186,105)';
+    deckLights.bb.forEach(([x, y]) => c.fillRect(x - 0.5, y - 0.5, 1, 1));
+    // traffic: tail lights heading into the city, headlights heading out
+    traffic.forEach(car => {
+      let s = (car.s + (car.up ? 1 : -1) * tm * car.v) % 1; if (s < 0) s += 1;
+      const az = lerp(166.6, 200.2, s), x = X(az), yd = Y(interp(BB_DECK, az));
+      const th = Math.atan(0.022 / interp(BB_DIST, az)) * R2D * pxV;
+      const y = car.up ? yd - 0.6 : yd + th * 0.5;
+      c.globalAlpha = on * (car.up ? 0.85 : 0.55);
+      c.fillStyle = car.up && car.tail ? 'rgb(255,60,48)' : 'rgb(255,244,226)';
+      c.fillRect(x - 0.6, y - 0.5, 1.2, 1);
+    });
+  }
+  // the Bay Lights: switch on as a sweep across the span at dusk
+  const front = smooth(-4.6, -6.4, e);
+  if (front > 0) {
+    c.fillStyle = 'rgb(232,240,255)';
+    suspAll.forEach((s, i) => {
+      if (s.u > front * 1.05) return;
+      const fade = clamp((front * 1.05 - s.u) * 12, 0, 1);
+      const len = s.yd - s.yc, n = Math.max(2, Math.floor(len / 3.6)), seg = len / n;
+      for (let k = 0; k < n; k++) {
+        const v = k / n, b = baysPattern(s.u, v, i, s.h, t);
+        if (b < 0.04) continue;
+        c.globalAlpha = clamp(b * fade * 0.95, 0, 1);
+        c.fillRect(s.x - 0.42, s.yc + k * seg, 0.84, seg * 0.72);
+      }
+    });
+  }
+  c.globalAlpha = 1; c.globalCompositeOperation = 'source-over';
+}
+
+/* ================= title: silhouette by day, neon by night ================= */
+let lit = false, igniteAt = 0, lastTitle = '';
+const FLICKER = [[0, 0], [45, 1], [95, 0], [170, 0], [190, 0.85], [250, 0.1], [320, 1], [360, 0.4], [430, 1]];
+function flicker(dt) { let v = 0; for (const [tt, a] of FLICKER) if (dt >= tt) v = a; return v; }
+function styleTitle(e, now) {
+  const thin = smooth(0.2, -5.5, e);
+  const w = Math.round(lerp(780, 170, thin));
+  if (e <= -6 && !lit) { lit = true; igniteAt = now; }
+  if (e > -5.6 && lit) lit = false;
+  const g = lit ? (reduce ? 1 : flicker(now - igniteAt)) : 0;
+  let color, shadow, stroke;
+  if (g > 0) {
+    color = 'rgba(255,236,226,' + (0.2 + 0.8 * g).toFixed(2) + ')';
+    shadow = '0 0 1px rgba(255,250,245,' + (0.9 * g).toFixed(2) + '),0 0 6px rgba(255,110,70,' + (0.95 * g).toFixed(2) + '),0 0 18px rgba(255,74,42,' + (0.8 * g).toFixed(2) + '),0 0 44px rgba(255,62,32,' + (0.55 * g).toFixed(2) + '),0 0 96px rgba(255,52,30,' + (0.3 * g).toFixed(2) + ')';
+    stroke = '0px transparent';
+  } else {
+    color = 'rgba(' + Math.round(lerp(14, 235, thin)) + ',' + Math.round(lerp(20, 226, thin)) + ',' + Math.round(lerp(36, 224, thin)) + ',' + lerp(0.92, 0.12, thin).toFixed(2) + ')';
+    shadow = 'none';
+    stroke = (thin * 1).toFixed(2) + 'px rgba(255,240,232,' + (0.4 * thin).toFixed(2) + ')';
+  }
+  const key = w + color + shadow + stroke;
+  if (key !== lastTitle) {
+    lastTitle = key;
+    titleEl.style.setProperty('--w', w);
+    titleEl.style.color = color; titleEl.style.textShadow = shadow; titleEl.style.webkitTextStroke = stroke;
+  }
+}
+
+/* ================= captions & readouts ================= */
+let capIdx = -1, swapTimer = 0;
+function setCaption(i) {
+  if (i === capIdx) return;
+  capIdx = i;
+  const ch = chapters[i];
+  const render = () => {
+    if (ch.end) {
+      capBody.innerHTML = '<div class="done">Handoff complete.</div><p class="foot"></p><button class="btn" type="button" id="again">Watch it again</button>';
+      capBody.querySelector('.foot').textContent = 'The sun’s path, the twilight times and the place it sets are calculated live for San Francisco today' + (tzOK ? '' : ' (using Pacific Daylight Time)') + '. Landmarks sit at their real bearings from Treasure Island; their heights are stretched so the skyline reads at this size.';
+      document.getElementById('again').addEventListener('click', () => { scrollTo({ top: 0, behavior: 'auto' }); displayM = M0; startIntro(); });
+      capEl.removeAttribute('aria-hidden');
+    } else {
+      capBody.innerHTML = ''; const p = document.createElement('p'); p.textContent = ch.text; capBody.appendChild(p);
+      capEl.setAttribute('aria-hidden', 'true');
+    }
+  };
+  clearTimeout(swapTimer);
+  if (reduce) { render(); return; }
+  capEl.classList.add('swap');
+  swapTimer = setTimeout(() => { render(); capEl.classList.remove('swap'); }, 240);
+}
+function chapterFor(m) { let k = 0; for (let i = 0; i < chapters.length; i++) if (m >= chapters[i].m) k = i; return k; }
+let lastClock = '', lastRel = '', lastAlt = '';
+function readouts(m, sun) {
+  const clk = fmtTime(mToMs(m));
+  const mi = Math.round(m);
+  const rel = mi < 0 ? (-mi) + ' min before sunset' : mi === 0 ? 'Sunset' : mi + ' min after sunset';
+  const el = sun.app;
+  const alt = Math.abs(el) < 0.3 ? 'Sun touching the horizon' : 'Sun ' + Math.abs(el).toFixed(1) + '° ' + (el > 0 ? 'above' : 'below') + ' the horizon';
+  if (clk !== lastClock) { clockEl.textContent = clk; lastClock = clk; }
+  if (rel !== lastRel) { relEl.textContent = rel; lastRel = rel; }
+  if (alt !== lastAlt) { altEl.textContent = alt; lastAlt = alt; }
+  railDot.style.top = ((m - M0) / (M1 - M0) * 100).toFixed(3) + '%';
+}
+
+/* ================= intro: fog clears, a timelapse, a rewind ================= */
+let intro = null, displayM = M0, hintShown = false;
+function startIntro(first) {
+  if (first) capIdx = 0;
+  if (reduce) { endIntro(); return; }
+  intro = { t0: performance.now() };
+  fogEl.hidden = false; fogEl.style.setProperty('--clear', '0%'); fogEl.style.opacity = '1';
+  skipEl.hidden = false; hintEl.classList.add('quiet');
+  if (!first) { capIdx = -1; setCaption(0); }
+}
+function endIntro() {
+  if (!intro && fogEl.hidden) return;
+  intro = null;
+  fogEl.hidden = true;
+  skipEl.hidden = true;
+  if (scrollY < 8 && !hintShown) { hintEl.classList.remove('quiet'); hintShown = true; }
+}
+function introM(ms) {
+  const easeIO = x => x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+  const fogP = smooth(700, 2500, ms);
+  fogEl.style.setProperty('--clear', (fogP * 150).toFixed(1) + '%');
+  fogEl.style.opacity = (1 - smooth(2200, 2700, ms)).toFixed(3);
+  if (ms < 2300) return M0;
+  if (ms < 7600) return lerp(M0, M1 - 4, easeIO((ms - 2300) / 5300));
+  if (ms < 8400) return M1 - 4;
+  if (ms < 10000) return lerp(M1 - 4, M0, easeIO((ms - 8400) / 1600));
+  endIntro(); return M0;
+}
+skipEl.addEventListener('click', () => { endIntro(); displayM = scrollToM(); });
+['wheel', 'touchmove', 'keydown'].forEach(evt => addEventListener(evt, ev => {
+  if (!intro) return;
+  if (evt === 'keydown' && !['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', ' ', 'End', 'Home'].includes(ev.key)) return;
+  endIntro();
+}, { passive: true }));
+addEventListener('scroll', () => { if (scrollY > 8) { hintEl.classList.add('quiet'); if (intro) endIntro(); } }, { passive: true });
+
+/* glass highlight follows the pointer */
+addEventListener('pointermove', ev => {
+  document.querySelectorAll('.glass').forEach(g => {
+    const r = g.getBoundingClientRect();
+    g.style.setProperty('--mx', (ev.clientX - r.left) + 'px'); g.style.setProperty('--my', (ev.clientY - r.top) + 'px');
+  });
+}, { passive: true });
+
+/* ================= frame loop ================= */
+let last = performance.now(), frames = 0, slow = 0, tStart = performance.now(), lastRim = '';
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  const tsec = (now - tStart) / 1000;
+  let m;
+  if (intro) { m = introM(now - intro.t0); displayM = m; }
+  if (!intro) {
+    const target = scrollToM();
+    displayM += (target - displayM) * (reduce ? 1 : 1 - Math.exp(-dt * 4.5));
+    m = displayM;
+  }
+  const sun = solar(mToMs(m));
+  const e = sun.app;
+  const sx = X(sun.az);
+  const drawnEl = e + 0.27 - sunR / pxV;
+  const sy = horizonY - drawnEl * pxV;
+  const fog = smooth(4, 34, m);
+
+  if (gl) {
+    drawLights(e, m, tsec);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, tex.lights);
+    if (!lightsAllocated) { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, lightsC); lightsAllocated = true; }
+    else gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, lightsC);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.uniform2f(U.uRes, canvas.width, canvas.height);
+    gl.uniform1f(U.uScale, scale);
+    gl.uniform1f(U.uTime, tsec);
+    gl.uniform1f(U.uMotion, reduce ? 0 : 1);
+    gl.uniform2f(U.uSun, sx, sy);
+    gl.uniform1f(U.uSunR, sunR);
+    gl.uniform1f(U.uE, e);
+    gl.uniform1f(U.uHorizon, horizonY);
+    gl.uniform1f(U.uPxV, pxV); gl.uniform1f(U.uPxH, pxH);
+    gl.uniform1f(U.uCenterAz, center);
+    gl.uniform1f(U.uFog, fog);
+    gl.uniform1f(U.uGateAz, 268);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  styleTitle(e, now);
+  readouts(m, sun);
+  if (!intro) setCaption(chapterFor(m));
+  const g = palAt(4, e), rim = 'rgba(' + Math.round(g[0]) + ',' + Math.round(g[1]) + ',' + Math.round(g[2]) + ',' + (0.22 + 0.25 * smooth(-12, 2, e)).toFixed(2) + ')';
+  if (rim !== lastRim) { document.documentElement.style.setProperty('--rim', rim); lastRim = rim; }
+
+  // keep it smooth on slower machines
+  frames++;
+  if (frames > 30 && dt > 0.028) slow++;
+  if (slow > 45 && perfCap > 1) { perfCap = perfCap > 1.2 ? 1 : 0.75; slow = 0; frames = 0; layout(); }
+  requestAnimationFrame(frame);
+}
+
+/* ================= boot ================= */
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+const ok = initGL();
+if (!ok) showFallback();
+layout();
+let rz = 0;
+addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(layout, 150); });
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { lastTitle = ''; });
+startIntro(true);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
